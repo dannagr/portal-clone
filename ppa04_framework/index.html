@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>CS 4621: PPA4 -- Portal</title>
+
+    <!-- Bootstrap -->
+    <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/cs4620.css" rel="stylesheet">
+    <link href="css/jquery-ui.min.css" rel="stylesheet">
+    <link href="css/jquery-ui.theme.min.css" rel="stylesheet">
+    <link href="css/jquery-ui.structure.min.css" rel="stylesheet">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!-- WARNING: Respond.js doesn't work if you view the page via file:// -->
+    <!--[if lt IE 9]>
+    <script src="https://oss.maxcdn.com/html5shiv/3.7.3/html5shiv.min.js"></script>
+    <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->
+</head>
+<body>
+<div class="container">
+    <h1>PORTAL</h1>
+    <h2 id="header" align="center" style="margin-top: 0px;">Select a Level to Configure!</h2>
+    <div align="center">
+        <canvas tabindex="1" id="webglCanvas" style="border: none; background-color: black;" width="800" height="600"></canvas>
+        <form>
+          <div>
+            <input type="radio" id="Level1" checked="checked" name="levelSelect" value=1>
+            <label for="Level1" id="L1" style="font-size : 20px; color : RoyalBlue">Level 1</label>
+
+            <input type="radio" id="Level2" name="levelSelect" value=2>
+            <label for="Level2" id="L2" style="font-size : 20px;">Level 2</label>
+
+            <input type="radio" id="Level3" name="levelSelect" value=3>
+            <label for="Level2" id="L3" style="font-size : 20px;">Level 3</label>
+          </div>
+          <div>
+            <button type="submit" style="font-size : 20px;">Configure Maze</button>
+          </div>
+        </form>
+    </div>
+</div>
+
+<!-- jQuery (necessary for Bootstrap's JavaScript plugins) -->
+<script src="js/jquery-3.1.1.min.js"></script>
+<script src="js/jquery-ui.min.js"></script>
+<script src="js/gl-matrix-min.js"></script>
+<script src="js/preloadjs-0.6.2.min.js"></script>
+
+<script id="vertexShader" type="x-shader/x-vertex">
+    attribute vec3 vert_position;
+    attribute vec2 vert_texCoord;
+    uniform vec3 color;
+    uniform mat4 projection;
+    uniform mat4 toWorld;
+    uniform mat4 camera;
+    varying vec2 geom_texCoord;
+    uniform float cameraFov;
+    uniform mat4 portal1;
+    uniform mat4 portal2;
+
+    void main() {
+        vec3 pos = vert_position;
+        if(color.x == 1.0 && color.y == 0.0 && color.z == 0.0) {
+          gl_Position = camera *vec4(pos, 1.0);
+        }
+        else {
+          gl_Position = projection * camera *vec4(pos, 1.0);
+        }
+
+        geom_texCoord = vert_texCoord;
+
+    }
+</script>
+
+<script id="fragmentShader" type="x-shader/x-fragment">
+    precision highp float;
+
+    uniform float cameraFov;
+    uniform float eyeHeight;
+    uniform vec3 color;
+
+    uniform sampler2D texture0;
+    uniform sampler2D texture1;
+    uniform sampler2D texture2;
+    uniform sampler2D texture;
+    varying vec2 geom_texCoord;
+
+    void main() {
+        //reticle
+        if(color.x == 1.0 && color.y == 0.0 && color.z == 0.0) {
+            gl_FragColor = vec4(1, 0.1, 0.1, 0);
+        }
+        //wall
+        else if(color.x == 1.0) {
+            gl_FragColor = texture2D(texture1, geom_texCoord);
+        }
+        //floor
+        else if(color.x == 0.0) {
+            if (color.y == -0.5){
+              gl_FragColor = texture2D(texture0, geom_texCoord);
+            }
+            else{
+              gl_FragColor = texture2D(texture0, geom_texCoord);
+              gl_FragColor.y = gl_FragColor.y + color.y;
+            }
+        }
+        //no idea
+        else if(color.z == .6) {
+        	gl_FragColor = vec4(.8, .2, 0.0, 0.0);
+        }
+        //no idea
+        else if (color.z == .5) {
+            gl_FragColor = vec4(0.0, 0.1, 0.9, 0.0);
+        }
+        //in portal outline
+        else if(color.z == .1) {
+        	gl_FragColor = vec4(0.4, 0.1, 0.0, 0.0);
+
+        }
+        //out portal outline
+        else if(color.z == .11) {
+        	gl_FragColor = vec4(0.0, 0.1, 0.4, 0.0);
+
+        }
+        //portal wall
+        else {
+            gl_FragColor = texture2D(texture2, geom_texCoord);
+        }
+    }
+</script>
+
+<script>
+    //global variables needed for ray tracing, matrices, movement and camera things here
+    var xAxis;
+    var yAxis;
+    var zAxis;
+    var cameraEye; //<xPos, yPos, eyeHeight>
+    var cameraUp;
+    var cameraDir;
+    var currentFloor;
+    var fov;
+    var cube_array;
+    var maze;
+    var headingX = 0;
+    var headingY = 0;
+    var lastMouseX = -1;
+    var lastMouseY = -1;
+	  var isClicked = false;
+    var initialized = false;
+    var movable = true;
+	  var canvas = document.getElementById("webglCanvas");
+    var lastTime = performance.now();
+    var animationLength = 130.0;
+    var animationTime = 0;
+    var nextPosX = 0;
+    var nextPosY = 0;
+    var oldPosX = 0;
+    var oldPosY = 0;
+    var velocityX = 0.25;
+    var velocityY = 0;
+    var acceleration = 0.002;
+    var fallable = false;
+    var in_portal;
+    var out_portal;
+
+    function initialize(level) {
+        xAxis = vec3.fromValues(1, 0, 0);
+        yAxis = vec3.fromValues(0, 1, 0);
+        zAxis = vec3.fromValues(0, 0, 1);
+        fov = 45;
+        cube_array = [];
+        var portalVert = vec3.fromValues(20.0, 20.0, 20.0);
+        var portalDir = vec3.fromValues(0, 0, 1);
+        var portalMesh = makePortal(portalVert, portalDir, "in");
+        var portalOutline = makeOutline(portalVert, portalDir, "in");
+
+        var portalVert2 = vec3.fromValues(20.0, 20.0, 20.0);
+        var portalDir2 = vec3.fromValues(0, 0, 1);
+        var portalMesh2 = makePortal(portalVert2, portalDir2, "out");
+        var portalOutline2 = makeOutline(portalVert, portalDir, "in");
+        if(level == 1){
+          var data = [
+            [//floor 1
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 2, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 1, 1, 0, 2, 1],
+            [1, 0, 0, 1, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 2, 0, 0, 0, 0, 2, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]],
+            [ //floor 2
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, -1, -1, -1, 1, -1, -1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, -1, -1, 2, 0, -1, 1, 1],
+            [1, -1, -1, 0, "G", -1, -1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, 1, -1, -1, -1, -1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]]
+          ];
+          currentFloor = 0;
+          maze = {
+              sizeX: 8,
+              sizeY: 8,
+              floors: 2,
+              startLocation: {x: 1, y: 1, z: currentFloor},
+              startDir: {x: -1, y: 1, z:-0.5},
+              data: data,
+          };
+        }
+        else if(level == 2){
+          var data = [
+            [//floor 1
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 2, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, "G", 0, 0, 0, 2, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]],
+            [//floor 2
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, -1, -1, 0, 0, 2, 0, 1],
+            [1, -1, -1, 0, 0, 0, 0, 1],
+            [1, -1, -1, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 0, 0, 2, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]],
+            [//floor 3
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, 2, 0, 0, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1, 1, 1, 1],
+            [1, -1, -1, -1, -1, -1, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, -1, -1, -1, -1, -1, -1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]],
+            [//floor 4
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 2, 0, -1, -1, -1, -1, 1],
+            [1, 0, 0, -1, -1, -1, -1, 1],
+            [1, 0, 0, -1, -1, -1, -1, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]]
+          ];
+          currentFloor = 0;
+          maze = {
+              sizeX: 10,
+              sizeY: 8,
+              floors: 4,
+              startLocation: {x: 2, y: 2, z: currentFloor},
+              startDir: {x: -1, y: 1, z:-0.5},
+              data: data,
+          };
+        }
+        else if(level == 3){
+          var data = [[
+            // floor 1
+            [1, 1, 1, 1, 1],
+            [1, 1, 2, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1], //user starts here
+            [1, 1, 1, 1, 1],
+
+            [1, 1, 1, 1, 1],
+            [1, 2, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+
+            [1, 1, 1, 1, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 2, 1],
+            [1, 1, 1, 1, 1]],
+            [// floor 2
+            [1, 1, 1, 1, 1],
+            [1, 0, 2, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, 1, 1, 1, 1],
+
+            [1, 1, 2, 0, 1],
+            [1, 1, 0, 0, 1],
+            [1, -1, -1, -1, 1],
+            [1, 0, "G", 0, 1],
+            [1, 1, 2, 1, 1],
+            [1, -1, 0, -1, 1],
+
+            [1, 0, 0, 0, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, 1, 1],
+            [1, 1, 1, 1, 1]],
+
+            [// floor 3
+            [1, 1, 1, 1, 1],
+            [1, -1, 1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, 0, 0, 0, 1],
+
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 2, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+            [1, 0, 0, 0, 1],
+
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, -1, 1],
+            [1, -1, -1, 1, 1],
+            [1, 1, 1, 1, 1]]
+          ];
+          currentFloor = 0;
+          maze = {
+              sizeX: 17,
+              sizeY: 5,
+              floors: 3,
+              startLocation: {x: 3, y: 2, z: currentFloor},
+              startDir: {x: -1, y: 0, z:-0.5},
+              data: data,
+          };
+        }
+
+        in_portal = {
+            vertices: portalVert,
+            dir: portalDir,
+            mesh: portalMesh,
+            outline: portalOutline,
+            exists: false,
+            type: "in",
+        };
+
+        out_portal = {
+            vertices: portalVert2,
+            dir: portalDir2,
+            mesh: portalMesh2,
+            outline: portalOutline2,
+            exists: false,
+            type: "out",
+        };
+        cameraEye = vec3.fromValues(maze.startLocation.x, maze.startLocation.y, maze.startLocation.z);
+        cameraUp = vec3.fromValues(0.0, 0.0, 1.0);
+        cameraDir = vec3.fromValues(maze.startDir.x, maze.startDir.y, maze.startDir.z);
+        headingX = Math.asin(cameraDir[0]);
+        headingY = Math.asin(cameraDir[2]);
+    }
+
+    //gravity
+    function fall(){
+      var floorData = maze.data[Math.ceil(cameraEye[2])];
+
+      if(floorData[Math.round(cameraEye[0])][Math.round(cameraEye[1])]==-1){
+        fallable = true;
+        velocityY+=acceleration;
+        cameraEye[2]-=velocityY;
+        if(cameraEye[2]<0){cameraEye[2]=0;}
+      }
+      else{
+        fallable = false;
+        currentFloor = Math.round(cameraEye[2]);
+      }
+    }
+
+    function teleport(portal) {
+    	cameraEye = vec3.create();
+    	var portalDir = portal.dir;
+    	var portalVert = portal.vertices;
+    	var offset = vec3.fromValues(portalDir[0]/2, portalDir[1]/2, portalDir[2]/2);
+    	vec3.add(cameraEye, portalVert, offset);
+    	cameraEye[2] = Math.round(cameraEye[2]);
+      currentFloor = cameraEye[2];
+
+      cameraDir = portal.dir;
+      headingX = Math.asin(cameraDir[0]);
+      headingY = Math.asin(cameraDir[2]);
+    }
+    function makeBlock(x, y, z, portal) {
+      var height = 0.5;
+      var r = 1.0;
+
+        var wallData = {
+            vertices: [
+                -0.5 + x, -0.5 + y, -height + z,//0
+                r, 0.0,
+                -0.5 + x, -0.5 + y,  height + z,//1
+                r, r,
+                -0.5 + x,  0.5 + y, -height + z,//2
+                0.0, 0.0,
+                -0.5 + x,  0.5 + y,  height + z,//3
+                0.0, r,
+                0.5 + x, -0.5 + y, -height + z,//4
+                0.0, 0.0,
+                0.5 + x, -0.5 + y,  height + z,//5
+                0.0, r,
+                0.5 + x,  0.5 + y, -height + z,//6
+                r, 0.0,
+                0.5 + x,  0.5 + y,  height + z,//7
+                r, r,
+            ],
+            lineInd: [
+                //0, 1, 0, 2, 0, 4, 1, 3, 1, 5, 2, 3, 2, 6, 4, 5, 4, 6, 6, 7, 5, 7, 3, 7
+            ],
+            triInd: [
+                0, 1, 3,
+                0, 3, 2, //left face
+                0, 2, 6,
+                0, 6, 4, //back face
+                4, 6, 7,
+                4, 7, 5, //right face
+                1, 5, 3,
+                3, 5, 7, //front face
+                2, 3, 7,
+                2, 7, 6, //top face
+                0, 5, 1,
+                0, 4, 5 //bottom face
+
+
+            ],
+            lineColor: [0.8, 0.8, 0.8],
+            fillColor: [portal, 1.0, 1.0],
+            x: x,
+            y: y
+        };
+        return wallData;
+    }
+    function makeFloor(x, y, z, goal) {
+        var r = 1.0;
+        if (goal){
+          var tint = 0.5;
+        }
+        else {
+          var tint = -0.5;
+        }
+        var floorData = {
+            vertices: [
+                -0.5 + x, -0.5 + y, z,//0
+                0.0, 0.0,
+                0.5 + x, -0.5 + y, z,//1
+                r, 0.0,
+                -0.5 + x, 0.5 + y, z,//2
+                0.0, r,
+                0.5 + x, 0.5 + y, z,//3
+                 r, r
+            ],
+            lineInd: [
+            ],
+            triInd: [
+                0, 1, 2,
+                1, 3, 2
+            ],
+            lineColor: [0.8, 0.8, 0.8],
+            fillColor: [0.0, tint, 0.0]
+        };
+        return floorData;
+    }
+    function makeQuad() {
+    	var r = .0075;
+        var quad = {
+            vertices: [
+		        -1.0*r, -1.0*r, 0.0*r,  // Lower left
+		        -1.0,  -1.0,
+		        1.0*r, -1.0*r, 0.0*r,  // Lower right
+		        1.0,  -1.0,
+		        1.0*r,  1.0*r, 0.0*r,  // Top right
+		        1.0,  1.0,
+		        -1.0*r,  1.0*r, 0.0*r,  // Top left
+		        -1.0,  1.0
+            ],
+            lineInd: [
+            ],
+            triInd: [
+				0, 1, 2,
+				0, 2, 3
+            ],
+            lineColor: [1, 0, 0],
+            fillColor: [1, 0, 0]
+        };
+        return quad;
+    }
+    function makePortal(pos, dir) {
+        var r = 4.0;
+        var len = .25;
+        x = pos[0];
+        y = pos[1];
+        z = Math.round(pos[2]);
+        x_disp = dir[1]*dir[1];
+        y_disp = dir[0]*dir[0];
+        var data = {
+            vertices: [
+            	-len*x_disp + x, -len*y_disp + y, z-len,//0
+                0.0, 0.0,
+                -len*x_disp + x, -len*y_disp + y, z+len,//1
+                r, 0.0,
+                len*x_disp + x, len*y_disp + y, z-len,//2
+                0.0, r,
+                len*x_disp + x, len*y_disp + y, z+len,//3
+                 r, r
+            ],
+            lineInd: [
+
+            ],
+            triInd: [
+                0, 1, 2,
+                1, 3, 2
+            ],
+            lineColor: [0.8, 0.8, 0.8],
+            fillColor: [.6, 0.6, 0.6]
+        };
+        return data;
+    }
+    function makeOutline(pos, dir, port) {
+        var r = 4.0;
+        var len = .3;
+
+        if(dir[0] >= 0) x = pos[0]-.001;
+        if(dir[0] < 0) x = pos[0] + .001;
+        if(dir[1] >= 0) y = pos[1] - .001;
+        if(dir[1] < 0) y = pos[1] + .001;
+        z = Math.round(pos[2]);
+        x_disp = dir[1]*dir[1];
+        y_disp = dir[0]*dir[0];
+
+        var data = {
+            vertices: [
+            	-len*x_disp + x, -len*y_disp + y, z-len,//0
+                0.0, 0.0,
+                -len*x_disp + x, -len*y_disp + y, z+len,//1
+                r, 0.0,
+                len*x_disp + x, len*y_disp + y, z-len,//2
+                0.0, r,
+                len*x_disp + x, len*y_disp + y, z+len,//3
+                 r, r
+            ],
+            lineInd: [
+            	0, 1, 2, 3, 0
+            ],
+            triInd: [
+                0, 1, 2,
+                1, 3, 2
+            ],
+            lineColor: [0.1, 0.1, 0.1],
+            fillColor: [.1, 0.1, 0.1]
+        };
+        if(port == "out") {
+        	data.lineColor = [0.11, 0.11, 0.11]
+        	data.fillColor = [0.11, 0.11, 0.11];
+        }
+        return data;
+    }
+    function makeFrame(pos, dir, type) {
+        var r = 4.0;
+        var len = .35;
+        var lineColor = []
+        x = pos[0];
+        y = pos[1];
+
+        x_disp = dir[1]*dir[1];
+        y_disp = dir[0]*dir[0];
+
+
+        if(type == "in") {
+            lineColor = [.1, .1, .1];
+        }
+
+        else if(type == "out") {
+            lineColor = [.2, .2, .2];
+        }
+        var floorData = {
+            vertices: [
+                -len*x_disp + x, -len*y_disp + y, -len,//0
+                0.0, 0.0,
+                -len*x_disp + x, -len*y_disp + y, len,//1
+                r, 0.0,
+                len*x_disp + x, len*y_disp + y, -len,//2
+                0.0, r,
+                len*x_disp + x, len*y_disp + y, len,//3
+                 r, r
+            ],
+            lineInd: [
+            ],
+            triInd: [
+                0, 1, 2,
+                1, 3, 2
+            ],
+            lineColor: lineColor,
+            fillColor: [.1, 0.0, 0.6]
+        };
+        return floorData;
+    }
+    function lockChangeAlert() {
+      if (document.pointerLockElement === canvas || document.mozPointerLockElement === canvas) {
+        isClicked = true;
+        document.addEventListener("mousemove", updateDir, false);
+      }
+      else {
+        isClicked = false;
+        document.removeEventListener("mousemove", updateDir, false);
+      }
+    }
+    canvas.onclick = function(event) {
+      // Ask the browser to lock the pointer
+        if(!isClicked && initialized) {
+    	    canvas.requestPointerLock = canvas.requestPointerLock ||
+    	    			       canvas.mozRequestPointerLock ||
+    	    			       canvas.webkitRequestPointerLock;
+          document.exitPointerLock = document.exitPointerLock ||
+                       document.mozExitPointerLock;
+    	    canvas.requestPointerLock();
+    	   	isClicked = true;
+          document.getElementById("header").innerHTML = "Navigate to the green square to win!";
+        }
+    };
+    function updateDir(event){
+        var curMouseX = event.clientX;
+        var curMouseY = event.clientY;
+
+        if(isClicked){
+            headingX+=(event.movementX/800)*Math.PI*2;
+            var nextHeadingY=headingY+(-event.movementY/600)*Math.PI;
+            if(!(nextHeadingY<-Math.PI/2||nextHeadingY>Math.PI/2)){
+              headingY=nextHeadingY;
+            }
+        }
+        cameraDir[0] = Math.sin(headingX);//x
+        cameraDir[1] = Math.cos(headingX);//y
+        cameraDir[2] = Math.sin(headingY);//z
+      };
+    function getProjMatrix() {
+        var aspect = 800/600;
+        var n = 0.01, f = 1000.0;
+        var P = mat4.create();
+        mat4.perspective(P, fov, aspect, n, f);
+        return P;
+    }
+    function getMVMatrix() {
+        var t = vec3.fromValues(0.0, 0.0, -2.0);
+        var T = mat4.create();
+        mat4.fromTranslation(T, t);
+
+        var R = mat4.create();
+        mat4.rotate(R, R, 45.0 * Math.PI/180, xAxis);
+        mat4.rotate(R, R, 0.0 * Math.PI/180, yAxis);
+        mat4.rotate(R, R, 0.0 * Math.PI/180, zAxis);
+
+        var s = vec3.fromValues(1.0, 1.0, 1.0);
+        var S = mat4.create();
+        mat4.fromScaling(S, s);
+
+        var M = mat4.create();
+        mat4.mul(M, M, T);
+        mat4.mul(M, M, R);
+        mat4.mul(M, M, S);
+        return M;
+    }
+    function getCameraMatrix() {
+        var out = mat4.create();
+        var eye = vec3.create();
+        vec3.set(eye, cameraEye[0], cameraEye[1], cameraEye[2]);
+        var center = vec3.create();
+        vec3.set(center, cameraEye[0] + cameraDir[0], cameraEye[1] + cameraDir[1], cameraEye[2] + cameraDir[2]);
+        mat4.lookAt(out, eye, center, cameraUp);
+        return out;
+    }
+
+    function getPortalCamera(pos, dir) {
+        var out = mat4.create();
+        var eye = vec3.create();
+        vec3.set(eye, pos[0], pos[1], pos[2]-.5);
+        var center = vec3.create();
+        vec3.set(center, eye[0] + dir[0], eye[1] + dir[1], eye[2] + dir[2]);
+        mat4.lookAt(out, eye, center, cameraUp);
+        return out;
+    }
+    function intersect(t0, t1, t2){
+        var p = vec3.clone(cameraEye);
+        var d = vec3.clone(cameraDir);
+        var ab = vec3.create();
+        vec3.sub(ab, t0, t1);
+        var ac = vec3.create();
+        vec3.sub(ac, t0, t2);
+        var ap = vec3.create();
+        vec3.sub(ap, t0, p);
+        var leftMat = mat3.fromValues(ab[0], ab[1], ab[2], ac[0], ac[1], ac[2], d[0], d[1], d[2]);
+        var m1 = mat3.fromValues(ap[0] ,ap[1], ap[2], ac[0], ac[1], ac[2], d[0], d[1], d[2]);
+        var m2 = mat3.fromValues(ab[0], ab[1], ab[2], ap[0], ap[1], ap[2], d[0], d[1], d[2]);
+        var m3 = mat3.fromValues(ab[0], ab[1], ab[2], ac[0], ac[1], ac[2], ap[0], ap[1], ap[2]);
+        var t = mat3.determinant(m3)/mat3.determinant(leftMat);
+        if(t < 0.0) return false;
+        var beta = mat3.determinant(m1)/mat3.determinant(leftMat);
+        if(beta < 0.0) return false;
+        var gamma = mat3.determinant(m2)/mat3.determinant(leftMat);
+        if(gamma < 0.0) return false;
+        if(beta+gamma > 1.0) return false;
+        return true;
+    }
+    function getTime(t0, t1, t2){
+        var p = vec3.clone(cameraEye);
+        var d = vec3.clone(cameraDir);
+        var ab = vec3.create();
+        vec3.sub(ab, t0, t1);
+        var ac = vec3.create();
+        vec3.sub(ac, t0, t2);
+        var ap = vec3.create();
+        vec3.sub(ap, t0, p);
+        var leftMat = mat3.fromValues(ab[0], ab[1], ab[2], ac[0], ac[1], ac[2], d[0], d[1], d[2]);
+        var m1 = mat3.fromValues(ap[0] ,ap[1], ap[2], ac[0], ac[1], ac[2], d[0], d[1], d[2]);
+        var m2 = mat3.fromValues(ab[0], ab[1], ab[2], ap[0], ap[1], ap[2], d[0], d[1], d[2]);
+        var m3 = mat3.fromValues(ab[0], ab[1], ab[2], ac[0], ac[1], ac[2], ap[0], ap[1], ap[2]);
+
+        var t = mat3.determinant(m3)/mat3.determinant(leftMat);
+        return t;
+    }
+    function findNormal(t0,  t1,  t2) {
+    	var u = vec3.create();
+    	vec3.subtract(u, t0, t1);
+    	var v = vec3.create();
+    	vec3.subtract(v, t0, t2);
+        // var nx = u.y*v.z - u.z*v.y;
+        // var ny = u.z*v.x - u.x*v.z;
+        // var nz = u.x*v.y - u.y*v.x;
+
+        var nx = u[1]*v[2] - u[2]*v[1];
+        var ny = u[2]*v[0] - u[0]*v[2];
+        var nz = u[0]*v[1] - u[1]*v[0];
+
+        var norm = vec3.fromValues(nx, ny, nz);
+        return norm;
+    }
+    function rayTrace(portal) {
+    	var min_t = 10000000;
+    	var min_block = -1;
+    	var face = -1;
+        for(var i = 0; i < cube_array.length; i++) {
+            var block = cube_array[i];
+            for(var j = 0; j < block.triInd.length; j+=3) {
+                var t0 = vec3.fromValues(block.vertices[block.triInd[j]*5], block.vertices[block.triInd[j]*5+1],
+                    block.vertices[block.triInd[j]*5+2]);
+                var t1 = vec3.fromValues(block.vertices[block.triInd[j+1]*5], block.vertices[block.triInd[j+1]*5+1],
+                    block.vertices[block.triInd[j+1]*5+2]);
+                var t2 = vec3.fromValues(block.vertices[block.triInd[j+2]*5+0], block.vertices[block.triInd[j+2]*5+1],
+                    block.vertices[block.triInd[j+2]*5+2]);
+                var t = getTime(t0, t1, t2);
+                if(intersect(t0, t1, t2) && t < min_t) {
+                	portal.exists = true;
+                    min_t = t;
+                    min_block = block;
+                    face = t0;
+                    portalDir = findNormal(t0, t1, t2);
+                    var offset = vec3.create();
+                    vec3.mul(offset, portalDir, vec3.fromValues(0.01, 0.01, 0.01));
+
+                    var portalVert = vec3.create();
+                    vec3.add(portalVert, t0, t1);
+                    vec3.add(portalVert, portalVert, t2);
+                    vec3.add(portalVert, portalVert, offset);
+                    vec3.divide(portalVert, portalVert, vec3.fromValues(3.0, 3.0, 3.0));
+
+                    if(portalDir[0] == 0) {
+                        portalVert[0] = block.x;
+                    }
+                    if(portalDir[1] == 0) {
+                        portalVert[1] = block.y;
+                    }
+                    vec3.add(portalVert, portalVert, offset);
+                }
+            }
+        }
+        if(min_block != -1  && min_block.fillColor[0] == 2.0) {
+        	portalVert[2] = Math.abs(portalVert[2]); //for some reason without this portal locations show up below the ground sometimes
+        	min_block.fillColor[2] = .7;
+        	portal.mesh = makePortal(portalVert, portalDir, portal.type);
+          portal.dir = portalDir;
+          portal.vertices = portalVert;
+          portal.outline = makeOutline(portalVert, portalDir, portal.type);
+    	}
+    }
+    function moveAnimation(elapsedTime) {
+      animationTime = animationTime + elapsedTime;
+      var percentage = animationTime/animationLength;
+
+      cameraEye[0] = oldPosX + (percentage * (nextPosX - oldPosX));
+      cameraEye[1] = oldPosY + (percentage * (nextPosY - oldPosY));
+
+      if (animationTime >= animationLength){
+          movable = true;
+          animationTime = 0;
+          oldPosX = 0;
+          oldPosY = 0;
+          nextPosX = 0;
+          nextPosY = 0;
+        }
+    }
+    function distance(p1, p2) {
+    	dist = (p1[0]-p2[0])*(p1[0]-p2[0]) + (p1[1]-p2[1])*(p1[1]-p2[1]) + (p1[2]-p2[2])*(p1[2]-p2[2]);
+    	return dist;
+    }
+    $("#webglCanvas").keydown(function (event) {
+      event.preventDefault();
+      if (movable && !fallable){
+        var mazeValue = -2;
+        var floorData = maze.data[currentFloor];
+        if(distance(cameraEye, in_portal.vertices) < .2) {
+          teleport(out_portal);
+	       }
+     	  else if(distance(cameraEye, out_portal.vertices) < .2) {
+      		teleport(in_portal);
+        }
+        //http://keycode.info/
+        var key = event.which;
+        if(cameraDir[0]<0){
+          var offsetX = -0.2;
+        }
+        else{
+          var offsetX = 0.2;
+        }
+        if(cameraDir[1]<0){
+          var offsetY = -0.2;
+        }
+        else{
+          var offsetY = 0.2;
+        }
+        //W and Up
+        if((key == 87 || key == 38)) {
+          nextPosX = cameraEye[0]+cameraDir[0]*velocityX;
+          nextPosY = cameraEye[1]+cameraDir[1]*velocityX;
+          mazeValue = floorData[Math.round(nextPosX+offsetX)][Math.round(nextPosY+offsetY)];
+          if(mazeValue == 0 || mazeValue == "G"){
+            oldPosX = cameraEye[0];
+            oldPosY = cameraEye[1];
+            movable = false;
+          }
+          else if(mazeValue == -1){
+            cameraEye[0]=nextPosX; cameraEye[1]=nextPosY;
+            fallable = true;
+          }
+        }
+        //S and Down
+        else if((key == 83 || key == 40)) {
+          nextPosX = cameraEye[0]-cameraDir[0]*velocityX;
+          nextPosY = cameraEye[1]-cameraDir[1]*velocityX;
+          mazeValue = floorData[Math.round(nextPosX-offsetX)][Math.round(nextPosY-offsetY)];
+          if(mazeValue == 0 || mazeValue == "G"){
+            oldPosX = cameraEye[0];
+            oldPosY = cameraEye[1];
+            movable = false;
+          }
+          else if(mazeValue == -1){
+            cameraEye[0]=nextPosX; cameraEye[1]=nextPosY;
+            fallable = true;
+          }
+        }
+        //1
+        else if(key == 49) {
+          rayTrace(in_portal);
+        }
+        //2
+        else if(key == 50) {
+          rayTrace(out_portal);
+        }
+        if(Math.sin((headingX+Math.PI/2))<0){
+          var offsetX = -0.2;
+        }
+        else{
+          var offsetX = 0.2;
+        }
+        if(Math.cos((headingX+Math.PI/2))<0){
+          var offsetY = -0.2;
+        }
+        else{
+          var offsetY = 0.2;
+        }
+        //A and left
+        if((key == 65 || key == 37)) {
+          nextPosX = cameraEye[0]-Math.sin((headingX+Math.PI/2))*velocityX;
+          nextPosY = cameraEye[1]-Math.cos((headingX+Math.PI/2))*velocityX;
+          mazeValue = floorData[Math.round(nextPosX-offsetX)][Math.round(nextPosY-offsetY)];
+          if(mazeValue == 0 || mazeValue == "G"){
+            oldPosX = cameraEye[0];
+            oldPosY = cameraEye[1];
+            movable = false;
+          }
+          else if(mazeValue == -1){
+            cameraEye[0]=nextPosX; cameraEye[1]=nextPosY;
+            fallable = true;
+          }
+        }
+        //D and right
+        else if((key == 68 || key == 39)) {
+          nextPosX = cameraEye[0]-Math.sin((headingX-Math.PI/2))*velocityX;
+          nextPosY = cameraEye[1]-Math.cos((headingX-Math.PI/2))*velocityX;
+          mazeValue = floorData[Math.round(nextPosX+offsetX)][Math.round(nextPosY+offsetY)];
+          if(mazeValue == 0 || mazeValue == "G"){
+            oldPosX = cameraEye[0];
+            oldPosY = cameraEye[1];
+            movable = false;
+          }
+          else if(mazeValue == -1){
+            cameraEye[0]=nextPosX; cameraEye[1]=nextPosY;
+            fallable = true;
+          }
+        }
+        if (mazeValue == "G"){
+          document.getElementById("header").innerHTML = "You Win!";
+        }
+      }
+    });
+
+    function initializeWebGL(canvasName) {
+        var canvas = $("#" + canvasName);
+        // Getting WebGL context the right way
+        var gl = null;
+        try {
+            gl = canvas[0].getContext("experimental-webgl");
+            if (!gl) {
+                gl = canvas[0].getContext("webgl");
+            }
+        } catch (error) {
+            // NO-OP
+        }
+        if (!gl) {
+            alert("Could not get WebGL context!");
+            throw new Error("Could not get WebGL context!");
+        }
+        return gl;
+    }
+    function createShader(gl, shaderScriptId) {
+        var shaderScript = $("#" + shaderScriptId);
+        var shaderSource = shaderScript[0].text;
+        var shaderType = null;
+        if (shaderScript[0].type == "x-shader/x-vertex") {
+            shaderType = gl.VERTEX_SHADER;
+        } else if (shaderScript[0].type == "x-shader/x-fragment") {
+            shaderType = gl.FRAGMENT_SHADER;
+        } else {
+            throw new Error("Invalid shader type: " + shaderScript[0].type)
+        }
+        var shader = gl.createShader(shaderType);
+        gl.shaderSource(shader, shaderSource);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            var infoLog = gl.getShaderInfoLog(shader);
+            gl.deleteShader(shader);
+            throw new Error("An error occurred compiling the shader: " + infoLog);
+        } else {
+            return shader;
+        }
+    }
+    function createGlslProgram(gl, vertexShaderId, fragmentShaderId) {
+        var program = gl.createProgram();
+        gl.attachShader(program, createShader(gl, vertexShaderId));
+        gl.attachShader(program, createShader(gl, fragmentShaderId));
+        gl.linkProgram(program);
+        gl.validateProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            var infoLog = gl.getProgramInfoLog(program);
+            gl.deleteProgram(program);
+            throw new Error("An error occurred linking the program: " + infoLog);
+        } else {
+            return program;
+        }
+    }
+    function createShape(gl, data) {
+        var shape = {};
+
+        shape.vertexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, shape.vertexBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data.vertices), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        shape.lineIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.lineIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(data.lineInd), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        shape.triIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.triIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(data.triInd), gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        shape.lineLen = data.lineInd.length;
+        shape.triLen = data.triInd.length;
+        shape.lineColor = data.lineColor;
+        shape.fillColor = data.fillColor;
+
+        return shape;
+    }
+    function drawShape(gl, shape, program, xf, proj, camera, stencil) {
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.STENCIL_TEST);
+
+        gl.useProgram(program);
+        gl.colorMask(true, true, true, true);
+        gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+		    gl.stencilFunc(gl.GREATER, stencil, 0xFF);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, shape.vertexBuffer);
+        var positionLocation = gl.getAttribLocation(program, "vert_position");
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 4 * 5, 0);
+        var texCoordLocation = gl.getAttribLocation(program, "vert_texCoord");
+        gl.enableVertexAttribArray(texCoordLocation);
+        gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 4 * 5, 4 * 3);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "toWorld"), false, xf);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"), false, proj);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "camera"), false, camera);
+        //gl.uniformMatrix4fv(gl.getUniformLocation(program, "portal1"), false, portal1);
+        //gl.uniformMatrix4fv(gl.getUniformLocation(program, "portal2"), false, portal2);
+
+        gl.uniform3fv(gl.getUniformLocation(program, "color"), shape.fillColor);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.triIndexBuffer);
+        gl.drawElements(gl.TRIANGLES, shape.triLen, gl.UNSIGNED_SHORT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        gl.uniform3fv(gl.getUniformLocation(program, "color"), shape.lineColor);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.lineIndexBuffer);
+        gl.drawElements(gl.LINES, shape.lineLen, gl.UNSIGNED_SHORT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        gl.useProgram(null);
+    }
+    function drawPortal(gl, shape, program, xf, proj, camera, stencil) {
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.STENCIL_TEST);
+
+        gl.useProgram(program);
+        gl.colorMask(gl.FALSE, gl.FALSE, gl.FALSE, gl.FALSE);
+    		gl.stencilFunc(gl.ALWAYS, stencil, 0xFF);
+    		gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+
+		    //should be keep keep replace
+		    //gl.stencilOp(gl.REPLACE, gl.REPLACE, gl.REPLACE);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, shape.vertexBuffer);
+        var positionLocation = gl.getAttribLocation(program, "vert_position");
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 4 * 5, 0);
+        var texCoordLocation = gl.getAttribLocation(program, "vert_texCoord");
+        gl.enableVertexAttribArray(texCoordLocation);
+        gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 4 * 5, 4 * 3);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "toWorld"), false, xf);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "projection"), false, proj);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "camera"), false, camera);
+        //gl.uniformMatrix4fv(gl.getUniformLocation(program, "portal1"), false, portal1);
+        //gl.uniformMatrix4fv(gl.getUniformLocation(program, "portal2"), false, portal2);
+
+        gl.uniform3fv(gl.getUniformLocation(program, "color"), shape.fillColor);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.triIndexBuffer);
+        gl.drawElements(gl.TRIANGLES, shape.triLen, gl.UNSIGNED_SHORT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        gl.uniform3fv(gl.getUniformLocation(program, "color"), shape.lineColor);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, shape.lineIndexBuffer);
+        gl.drawElements(gl.LINES, shape.lineLen, gl.UNSIGNED_SHORT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+        gl.useProgram(null);
+    }
+    function isPowerOf2(value) {
+        return (value & (value - 1)) == 0;
+    }
+    function createTexture(gl, image) {
+        var texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        if (isPowerOf2(image.width) && isPowerOf2(image.height)) {
+           // Yes, it's a power of 2. Generate mips.
+           gl.generateMipmap(gl.TEXTURE_2D);
+
+        } else {
+           // No, it's not a power of 2. Turn of mips and set wrapping to clamp to edge
+           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+           gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        }
+        //gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        return texture;
+    }
+	  function createFloatTexture(gl, width, height) {
+	    var texture = gl.createTexture();
+	    gl.bindTexture(gl.TEXTURE_2D, texture);
+	    gl.texImage2D(
+	        // Always gl.TEXTURE_2D for a 2D texture.
+	        gl.TEXTURE_2D,
+	        // Mipmap level.  Always 0.
+	        0,
+	        // Internal format of each pixel.  Here we want an RGBA texture.
+	        gl.RGBA,
+	        // Width of the texture.
+	        width,
+	        // Height of the texture.
+	        height,
+	        // Width of the border of the texture.  Always 0.
+	        0,
+	        // The pixel format of the data that is going to be uploaded to the GPU.
+	        // We have no data here, so use something that matches the internal format.
+	        gl.RGBA,
+	        // The type of each component of the pixel that is going to be uploaded.
+	        // Here we want a floating point texture.
+	        gl.FLOAT,
+	        // The data that is going to be uploaded.
+	        // We don't have any data, so we give null.
+	        // WebGL will just allocate the texture and leave it blank.
+	        null
+	    );
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+	    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+	    gl.bindTexture(gl.TEXTURE_2D, null);
+	    return texture;
+    }
+    function startWebGL() {
+        loadQueue();
+    }
+    function runWebGL(queue) {
+        var gl = initializeWebGL("webglCanvas");
+        var program = createGlslProgram(gl, "vertexShader", "fragmentShader");
+        var worldSpaceEnv = glEnv(gl, program);
+        ["texture0", "texture1", "texture2"].forEach(function(name) {
+            program[name] = gl.getUniformLocation(program, name);
+        });
+
+        var floorTexture = createTexture(gl, queue.getResult("floor", false));
+        var wallTexture = createTexture(gl, queue.getResult("wall3", false));
+        var portalTexture = createTexture(gl, queue.getResult("portal", false));
+      function updateWebGL(time) {
+          var currentTime = performance.now();
+          var elapsedTime = currentTime - lastTime;
+          lastTime = currentTime;
+
+          if(!movable){
+            moveAnimation(elapsedTime);
+          }
+
+          if(fallable){
+            fall();
+          }
+
+          gl.useProgram(program);
+          if (program.texture0 != null) {
+              gl.activeTexture(gl.TEXTURE0);
+              gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+              gl.uniform1i(program.texture0, 0);
+          }
+          if (program.texture1 != null) {
+              gl.activeTexture(gl.TEXTURE1);
+              gl.bindTexture(gl.TEXTURE_2D, wallTexture);
+              gl.uniform1i(program.texture1, 1);
+          }
+          if (program.texture2 != null) {
+              gl.activeTexture(gl.TEXTURE2);
+              gl.bindTexture(gl.TEXTURE_2D, portalTexture);
+              gl.uniform1i(program.texture2, 2);
+          }
+          gl.useProgram(null);
+          worldSpaceEnv.setXf(getMVMatrix());
+          worldSpaceEnv.setProj(getProjMatrix());
+          worldSpaceEnv.setCamera(getCameraMatrix());
+          worldSpaceEnv.setInPortalCamera(getPortalCamera(in_portal.vertices, in_portal.dir));
+          worldSpaceEnv.setOutPortalCamera(getPortalCamera(out_portal.vertices, out_portal.dir));
+
+          if(isClicked) {
+          	worldSpaceEnv.drawFrame();
+     		  }
+
+
+          // Reschedule the next frame.
+          window.requestAnimationFrame(updateWebGL);
+        }
+
+        window.requestAnimationFrame(updateWebGL);
+
+    }
+    //initialize camera direction according to mesh
+    //then update camera direction according to arrow commands
+
+    function glEnv(gl, program) {
+        var xf = mat4.create();
+        function setXf(newXf) {
+            mat4.copy(xf, newXf);
+        }
+        var proj = mat4.create();
+        function setProj(newProj) {
+            mat4.copy(proj, newProj);
+        }
+        var camera = mat4.create();
+        function setCamera(newCamera) {
+            mat4.copy(camera, newCamera);
+        }
+        var inPortalCamera = mat4.create();
+        function setInPortalCamera(newPortal) {
+            mat4.copy(inPortalCamera, newPortal);
+        }
+        var outPortalCamera = mat4.create();
+        function setOutPortalCamera(newPortal) {
+            mat4.copy(outPortalCamera, newPortal);
+        }
+        var shape_array = [];
+        cube_array = [];
+
+        for(var h = 0; h < maze.floors; h++){
+          var floorData = maze.data[h];
+          for(var i = 0; i < maze.sizeX; i++ ) {
+              for(var j = 0; j < maze.sizeY; j++) {
+                  if(floorData[i][j] == 1) {
+                      var block = makeBlock(i, j, h, 1.0);
+                      cube_array.push(block);
+                      var cube = createShape(gl, block);
+                      shape_array.push(cube);
+                  }
+                  else if(floorData[i][j] == 2) {
+                      var block = makeBlock(i, j, h, 2.0);
+                      cube_array.push(block);
+                      var cube = createShape(gl, block);
+                      shape_array.push(cube);
+                  }
+                  if(floorData[i][j] != -1) {
+                    if(floorData[i][j] == "G"){
+                      var goal = true;
+                    }
+                    else{
+                      var goal = false;
+                    }
+                    var floor = createShape(gl, makeFloor(i, j, h-0.50025, goal));
+                    shape_array.push(floor);
+                    var floor = createShape(gl, makeFloor(i, j, h-0.49975, goal));
+                    shape_array.push(floor);
+                  }
+                  if (h == maze.floors-1){
+                    var floor = createShape(gl, makeFloor(i, j, h+1-0.5005, false));
+                    shape_array.push(floor);
+                  }
+              }
+          }
+        }
+        function drawFrame() {
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT| gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+
+            // var reticleMesh = makeReticle(cameraEye, cameraDir);
+            // var reticleShape = createShape(gl, reticleMesh);
+            var in_portal_shape = createShape(gl, in_portal.mesh);
+            var out_portal_shape = createShape(gl, out_portal.mesh);
+            var quad = createShape(gl, makeQuad());
+            var in_outline = createShape(gl, in_portal.outline);
+            var out_outline = createShape(gl, out_portal.outline);
+
+            if(in_portal.exists && out_portal.exists) {
+	            //draw in portal view
+	            for(var i = 0; i < shape_array.length; i++) {
+	               drawShape(gl, shape_array[i], program, xf, proj, inPortalCamera, 1);
+	            }
+	            gl.clear(gl.DEPTH_BUFFER_BIT);
+
+	            //draw out portal
+	            drawPortal(gl, out_portal_shape, program, xf, proj, camera, 2);
+
+	            //draw out portal view
+	            for(var i = 0; i < shape_array.length; i++) {
+	               drawShape(gl, shape_array[i], program, xf, proj, outPortalCamera, 2);
+	            }
+	            gl.clear(gl.DEPTH_BUFFER_BIT);
+
+	            //draw out portal again?
+	            drawPortal(gl, out_portal_shape, program, xf, proj, camera, 1);
+	            //draw in portal
+	            drawPortal(gl, in_portal_shape, program, xf, proj, camera, 3);
+
+        	}
+
+			//draw camera view
+            for(var i = 0; i < shape_array.length; i++) {
+               drawShape(gl, shape_array[i], program, xf, proj, camera, 3);
+            }
+            drawShape(gl, in_outline, program, xf, proj, camera, 3);
+            drawShape(gl, out_outline, program, xf, proj, camera, 3);
+
+            //reticle
+            drawShape(gl, quad, program, mat4.create(), mat4.create(), mat4.create(), 1);
+        }
+        return {
+            setXf: setXf,
+            setProj: setProj,
+            setCamera: setCamera,
+            setInPortalCamera: setInPortalCamera,
+            setOutPortalCamera: setOutPortalCamera,
+            drawFrame: drawFrame
+        }
+    }
+    function loadQueue() {
+        var result = [];
+        var queue = new createjs.LoadQueue();
+        queue.loadManifest([
+            {
+                id: "floor",
+                src: "data/floor2.jpg"
+            },
+            {
+                id: "wall3",
+                src: "data/wall2.jpg"
+            },
+            {
+                id: "portal",
+                src: "data/portal.jpg"
+            }
+        ]);
+        queue.on("complete", function() {runWebGL(queue) },this);
+    }
+
+    var form = document.querySelector("form");
+
+    form.addEventListener("submit", function(event) {
+      var levelButtons = document.getElementsByName("levelSelect");
+      for (var i = 0, length = levelButtons.length; i < length; i++){
+        if (levelButtons[i].checked){
+          for(var j = 0; j < 3; j++){
+            if (j == i){
+              document.getElementById("L"+ levelButtons[j].value).style.color = "RoyalBlue";
+            }
+            else{
+              document.getElementById("L"+ levelButtons[j].value).style.color = "black";
+            }
+          }
+          document.getElementById("header").innerHTML = "Click on the Canvas to Begin";
+          initialized = true;
+          initialize(levelButtons[i].value);
+          document.addEventListener('pointerlockchange', lockChangeAlert, false);
+          document.addEventListener('mozpointerlockchange', lockChangeAlert, false);
+          startWebGL();
+       }
+      }
+      event.preventDefault();
+    }, false);
+
+</script>
+
+</body>
+</html>
